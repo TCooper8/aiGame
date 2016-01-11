@@ -27,3 +27,11 @@ func init() {
   typeMapping[AuthRegister.Name()] = AuthRegister
   replyMapping[AuthRegister.Name()] = AuthRegisterReply
 }
+
+func GetType(eventType string) (*reflect.Type, bool) {
+  return typeMapping[eventType]
+}
+
+func GetResponseType(eventType string) (*reflect.Type, bool) {
+  return replyMapping[eventType]
+}
