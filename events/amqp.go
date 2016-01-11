@@ -1,8 +1,7 @@
 package events
 
 import (
-  //"errors"
-  "reflect"
+  "errors"
   "github.com/tcooper8/aiGame/logging"
   "github.com/streadway/amqp"
   "code.google.com/p/go-uuid/uuid"
@@ -10,10 +9,10 @@ import (
 )
 
 type AmqpEventMapping struct {
-  EndPoint    string
-  EventType   reflect.Type
-  Exhange     string
-  ReqQueue    string
+  EndPoint        string
+  EventType       string
+  Exchange        string
+  ReqQueue        string
   privateQueue    string
   respListenQueue string
 }
@@ -49,12 +48,11 @@ type getMappingMsg struct {
 
 type GetConnReply struct {
   connInfo  *connInfo
-  err       error
+  ok        bool
 }
 
 type getConnMsg struct {
-  conn  *connInfo
-  ok    bool
+  eventType string
 }
 
 // Set mapping change
@@ -87,14 +85,34 @@ func NewAmqpPool(name string, logLevel int) (*AmqpPool, error) {
   return &pool, nil
 }
 
+func (pool *AmqpPool) consumeResponseEvent(eventType string) error {
+  eventType, ok := events.GetType(eventType)
+  if !ok {
+    return errors.New("Invalid event type")
+  }
+
+  respType, ok := events.GetResponseType(eventType)
+  if !ok {
+    return errors.New("Invalid response event type")
+  }
+
+  connInfo, err := pool.GetConnInf
+
+  go func() {
+
+  }()
+
+  return nil
+}
+
 func (pool *AmqpPool) loadDefaultMappings() {
   pool.setMapping(
     &AmqpEventMapping{
-      EndPoint  : "amqp://localhost:5672/",
-      EventType : AuthRegister,
-      Exchange  : "auth",
-      ReqQueue  : "auth",
-      RespListenQueue : "auth.register.response",
+      EndPoint        : "amqp://localhost:5672/",
+      EventType       : "AuthRegister",
+      Exchange        : "auth",
+      ReqQueue        : "auth",
+      respListenQueue : "auth.register.response",
       privateQueue    : uuid.New(),
     },
   )
@@ -127,6 +145,23 @@ func (pool *AmqpPool) handleChanges() {
       }
     }
   }
+}
+
+func (pool *AmqpPool) GetConn(eventType string) (*connInfo, bool) {
+  reply := make(chan *GetConnReply)
+
+  change := getConnMsg{
+    eventType: eventType,
+  }
+
+  pool.changes <- change
+
+  resp := <-reply
+  return resp.connInfo, resp.ok
+}
+
+func (pool *AmqpPool) getConn(eventType string) (*connInfo, bool) {
+  return pool.connMap[eventType]
 }
 
 func (pool *AmqpPool) GetMapping(eventType string) (*AmqpEventMapping, bool) {
@@ -166,7 +201,7 @@ func (pool *AmqpPool) setMapping(mapping *AmqpEventMapping) error {
     return err
   }
 
-  go pool.consumeEvents(eventType)
+  go pool.consumeEvent(eventType)
 
   connInfo := connInfo{
     conn    : conn,
