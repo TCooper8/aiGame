@@ -1,13 +1,13 @@
 package events
 
-type Counter {
+type Counter struct {
   n   int
   inc chan int
   get chan (chan int)
 }
 
 func NewCounter() *Counter {
-  inc := make(chan int)
+  inc := make(chan int, 128)
   get := make(chan chan int)
 
   counter := Counter{
@@ -24,7 +24,7 @@ func NewCounter() *Counter {
     case reply := <-get:
       reply <- counter.n
     }
-  }
+  }()
 
   return &counter
 }
@@ -36,9 +36,11 @@ func (counter *Counter) Inc(i int) {
 func (counter *Counter) Get() int {
   reply := make(chan int)
   counter.get <- reply
+
+  return <-reply
 }
 
 func (counter *Counter) Close() {
-  close counter.inc
-  close counter.get
+  close(counter.inc)
+  close(counter.get)
 }
