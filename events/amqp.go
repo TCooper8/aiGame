@@ -18,9 +18,10 @@ type AmqpEventMapping struct {
 }
 
 type connInfo struct {
-  conn    *amqp.Connection
-  ch      *amqp.Channel
-  mapping *AmqpEventMapping
+  conn        *amqp.Connection
+  ch          *amqp.Channel
+  mapping     *AmqpEventMapping
+  cancelToken chan<- bool
 }
 
 type AmqpPool struct {
@@ -96,10 +97,123 @@ func (pool *AmqpPool) consumeResponseEvent(eventType string) error {
     return errors.New("Invalid response event type")
   }
 
-  connInfo, err := pool.GetConnInf
+  connInfo, ok := pool.GetConn(eventType)
+  if !ok {
+    return errors.New("No mapping found for event type")
+  }
 
+  conn := connInfo.conn
+  ch := connInfo.ch
+  mapping := connInfo.mapping
+
+  // Declare the exchange and queue for the event.
+  err = ch.ExchangeDeclare(
+    mapping.Exchange, // Exchange name
+    "topic",          // Topical
+    true,             // . . .
+    false,
+    false,
+    false,
+    nil,
+  )
+  if err != nil {
+    return err
+  }
+
+  // Declare the queue for the event.
+  err = ch.QueueDeclare(
+    mapping.ReqQueue,
+    false,
+    false,
+    false,
+    false,
+    nil,
+  )
+  if err != nil {
+    return err
+  }
+
+  // Bind the event to the appropriate routing keys.
+  err = ch.QueueBind(
+    mapping.ReqQueue,
+    eventType,
+    mapping.Exchange,
+    false,
+    nil,
+  )
+  if err != nil {
+    return err
+  }
+
+  // Consume the deliveries from this channel.
+  deliveries, err := ch.Cosnume(
+    mapping.ReqQueue,
+    "",
+    false,
+    false,
+    false,
+    false,
+    nil,
+  )
+  if err != nil {
+    return err
+  }
+
+  err = ch.Qos(1, 0, false)
+  if err != nil {
+    return err
+  }
+
+  // Spin up the goroutine to consume the events.
   go func() {
+    log.Info("Consume message from %s", sub.ReqQueue)
 
+    cancelToken := connInfo.cancelToken
+
+    counter := NewCounter()
+
+    for {
+      select {
+      case <-cancelToken:
+        log.Info("Stopping %s", mapping.EndPoint)
+        return
+
+      case letter := <-deliveries:
+        req := reflect.New(eventType).Elem().Interface()
+
+        err := json.Unmarshal(letter.body, req)
+        if err != nil {
+          log.Warn("Unable to unmarshal letter: %s", err)
+          continue
+        }
+
+        counter.Inc(1)
+
+        reply := make(chan interface{})
+        handle := EventRequest{
+          Request : req,
+          Reply   : reply
+        }
+
+        go func() {
+          respI := <-reply
+          close reply
+
+          resp, ok := respI.(respType)
+          if !ok {
+            log.Warn("Response is invalid type %s", respI)
+            return
+          }
+
+          log.Info("Publishing response %s", resp)
+          counter.Inc(-1)
+        }()
+      }
+
+      for counter.Get() > 32 {
+        time.Sleep(16 * time.Millisecond)
+      }
+    }
   }()
 
   return nil
